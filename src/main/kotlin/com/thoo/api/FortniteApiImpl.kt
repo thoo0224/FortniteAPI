@@ -3,12 +3,14 @@ package com.thoo.api
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.thoo.api.enum.ClientToken
+import com.thoo.api.enum.Platform
 import com.thoo.api.interceptor.DefaultInterceptor
 import com.thoo.api.model.Account
 import com.thoo.api.model.Device
 import com.thoo.api.exception.EpicError
 import com.thoo.api.exception.FortniteApiError
 import com.thoo.api.service.AccountPublicService
+import com.thoo.api.xmpp.XMPPConnection
 import okhttp3.JavaNetCookieJar
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -19,7 +21,8 @@ import java.util.concurrent.TimeUnit
 
 class FortniteApiImpl(
     private val authorizationCode: String?,
-    private var device: Device?
+    private var device: Device?,
+    platform: Platform
 ): FortniteApi {
 
     //private val authorizationUrl = "https://www.epicgames.com/id/logout?redirectUrl=https://www.epicgames.com/id/login?redirectUrl=https%3A%2F%2Fwww.epicgames.com%2Fid%2Fapi%2Fredirect%3FclientId%3Dec684b8c687f479fadea3cb2ad83f5c6%26responseType%3Dcode"
@@ -33,6 +36,8 @@ class FortniteApiImpl(
     private val okhttp = OkHttpClient.Builder()
         .cookieJar(cookieJar)
         .addInterceptor(DefaultInterceptor(this)).build()
+
+    override val xmpp: XMPPConnection = XMPPConnection(platform, this)
 
     override val accountPublicService: AccountPublicService
 
@@ -58,16 +63,17 @@ class FortniteApiImpl(
         account = deviceResponse.body()
         val exchangeResponse = accountPublicService.exchange().execute()
         if(!exchangeResponse.isSuccessful){
-            val error = gson.fromJson(deviceResponse.errorBody()?.string(), EpicError::class.java)
+            val error = gson.fromJson(exchangeResponse.errorBody()?.string(), EpicError::class.java)
             throw FortniteApiError("${error.errorMessage} (${error.errorCode})")
         }
-        val exchangeAuthResponse = accountPublicService.grantToken("basic ${ClientToken.FN_IOS_GAME_CLIENT}", "exchange_code",
+        val exchangeAuthResponse = accountPublicService.grantToken("basic ${ClientToken.FN_IOS_GAME_CLIENT.token}", "exchange_code",
         mapOf("exchange_code" to exchangeResponse.body()?.code!!)).execute()
-        if(!deviceResponse.isSuccessful){
-            val error = gson.fromJson(deviceResponse.errorBody()?.string(), EpicError::class.java)
+        if(!exchangeAuthResponse.isSuccessful){
+            val error = gson.fromJson(exchangeAuthResponse.errorBody()?.string(), EpicError::class.java)
             throw FortniteApiError("${error.errorMessage} (${error.errorCode})")
         }
         account = exchangeAuthResponse.body()
+        println(account?.access_token)
     }
 
     override fun loginWithAuthorization(token: ClientToken) {
@@ -81,24 +87,28 @@ class FortniteApiImpl(
         account = authorizationResponse.body()
         val exchangeResponse = accountPublicService.exchange().execute()
         if(!exchangeResponse.isSuccessful) {
-            val error = gson.fromJson(authorizationResponse.errorBody()?.string(), EpicError::class.java)
+            val error = gson.fromJson(exchangeResponse.errorBody()?.string(), EpicError::class.java)
             throw FortniteApiError("${error.errorMessage} (${error.errorCode})")
         }
         val exchangeAuthResponse = accountPublicService.grantToken("basic ${ClientToken.FN_IOS_GAME_CLIENT.token}", "exchange_code",
         mapOf("exchange_code" to exchangeResponse.body()?.code!!)).execute()
         if(!exchangeAuthResponse.isSuccessful) {
-            val error = gson.fromJson(authorizationResponse.errorBody()?.string(), EpicError::class.java)
+            val error = gson.fromJson(exchangeAuthResponse.errorBody()?.string(), EpicError::class.java)
             throw FortniteApiError("${error.errorMessage} (${error.errorCode})")
         }
         account = exchangeAuthResponse.body()
         val createDeviceResponse = accountPublicService.createDevice(account?.account_id!!).execute()
         if(!createDeviceResponse.isSuccessful){
             println(createDeviceResponse.code())
-            val error = gson.fromJson(authorizationResponse.errorBody()?.string(), EpicError::class.java)
+            val error = gson.fromJson(createDeviceResponse.errorBody()?.string(), EpicError::class.java)
             throw FortniteApiError("${error.errorMessage} (${error.errorCode})")
         }
         device = createDeviceResponse.body()
         loginWithDevice(token)
+    }
+
+    override fun connectXMPP() {
+        xmpp.connect()
     }
 
     private fun verifyToken() {
